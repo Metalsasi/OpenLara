@@ -22,6 +22,7 @@ extern "C" {
     __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 
+#include <functional>
 #include "game.h"
 
 #define GetProcAddr(lib, x) (x = lib ? (decltype(x))GetProcAddress(lib, #x + 1) : NULL)
@@ -868,6 +869,102 @@ bool GetDigitalActionState(vr::VRActionHandle_t action, vr::VRInputValueHandle_t
     return actionData.bActive && actionData.bState;
 }
 
+std::function<void(vr::IVRSystem *, int)> vrControllerHandler = nullptr;
+
+#define IS_DOWN(btn) ((state.ulButtonPressed & vr::ButtonMaskFromId(btn)) != 0)
+
+void defaultVRControllerHandler(vr::IVRSystem *hmd, int id)
+{
+    vr::VRControllerState_t state;
+    hmd->GetControllerState(id, &state, sizeof(state));
+
+
+    if ( !state.ulButtonPressed ) {
+        //   return;
+    }
+
+    Input::setJoyDown(0, jkLeft,  IS_DOWN(vr::k_EButton_DPad_Left));
+    Input::setJoyDown(0, jkUp,    IS_DOWN(vr::k_EButton_DPad_Up));
+    Input::setJoyDown(0, jkRight, IS_DOWN(vr::k_EButton_DPad_Right));
+    Input::setJoyDown(0, jkDown,  IS_DOWN(vr::k_EButton_DPad_Down));
+
+    if (IS_DOWN(vr::k_EButton_Axis0)) {
+         Input::setJoyPos(0, jkL, vec2(state.rAxis[0].x, -state.rAxis[0].y));
+    }
+
+    Input::setJoyDown(0, jkA, IS_DOWN(vr::k_EButton_Axis1) ? (state.rAxis[1].x > 0.5) : false);
+    Input::setJoyDown(0, jkY, IS_DOWN(vr::k_EButton_Grip));
+    Input::setJoyDown(0, jkX, IS_DOWN(vr::k_EButton_ApplicationMenu));
+
+    // TODO
+    switch (hmd->GetControllerRoleForTrackedDeviceIndex(id)) {
+        case vr::TrackedControllerRole_LeftHand :
+            // TODO
+            break;
+        case vr::TrackedControllerRole_RightHand :
+            // TODO
+            break;
+        default : ;
+    }
+}
+
+//TODO: Bind LT, RT, DPad??
+void oculusQuest2ControllerHandler(vr::IVRSystem *hmd, int id)
+{
+    vr::VRControllerState_t state;
+    hmd->GetControllerState(id, &state, sizeof(state));
+
+    switch (hmd->GetControllerRoleForTrackedDeviceIndex(id))
+    {
+    case vr::TrackedControllerRole_LeftHand:
+                                                                                                      /*Enum           | Quest Controller */
+        Input::setJoyPos(0, jkL, vec2(state.rAxis[0].x, -state.rAxis[0].y));                          /*Axis0          | Joy              */
+        Input::setJoyDown(0, jkLB, IS_DOWN(vr::k_EButton_Axis1) ? (state.rAxis[1].x > 0.5) : false);  /*Axis1          | Trigger          */
+        Input::setJoyDown(0, jkRB, IS_DOWN(vr::k_EButton_Grip));                                      /*Axis2 and Grip | Grip             */
+        Input::setJoyDown(0, jkSelect, IS_DOWN(vr::k_EButton_A));                                     /*A              | A or X           */
+        Input::setJoyDown(0, jkStart, IS_DOWN(vr::k_EButton_Knuckles_B));                             /*Knuckles_B     | B or Y           */
+
+        break;
+    case vr::TrackedControllerRole_RightHand:
+
+        Input::setJoyPos(0, jkR, vec2(state.rAxis[0].x, -state.rAxis[0].y));
+        Input::setJoyDown(0, jkA, IS_DOWN(vr::k_EButton_Axis1) ? (state.rAxis[1].x > 0.5) : false);
+        Input::setJoyDown(0, jkY, IS_DOWN(vr::k_EButton_Grip));
+        Input::setJoyDown(0, jkX, IS_DOWN(vr::k_EButton_A));
+        Input::setJoyDown(0, jkB, IS_DOWN(vr::k_EButton_Knuckles_B));
+
+        break;
+    default:;
+    }
+}
+
+#undef IS_DOWN
+
+void initVRControllerHandler(vr::IVRSystem *hmd, int deviceId)
+{
+    vrControllerHandler = &defaultVRControllerHandler;
+
+    char name[1024];
+    vr::ETrackedPropertyError errorCode;
+    hmd->GetStringTrackedDeviceProperty(deviceId, vr::ETrackedDeviceProperty::Prop_RenderModelName_String, name, sizeof(name), &errorCode);
+
+    if ( errorCode != vr::ETrackedPropertyError::TrackedProp_Success )
+    {
+        LOG("Unable to determine VR controller type!");
+        return;
+    }
+
+    if (std::strncmp(name, "oculus_quest2_controller", 24) == 0) //could be oculus_quest2_controller_left or rigtht
+    {
+        vrControllerHandler = &oculusQuest2ControllerHandler;
+        LOG("Oculus Quest 2 controller is detected");
+    }
+    else {
+        LOG("VR controller \"%s\" not yet supported\n", name);
+    }
+
+}
+
 void vrUpdate() {
     if (!hmd) return;
 
@@ -916,41 +1013,13 @@ void vrUpdate() {
                 break;
             }
             case vr::TrackedDeviceClass_Controller : {
-                vr::VRControllerState_t state;
-                hmd->GetControllerState(id, &state, sizeof(state));
-
-                #define IS_DOWN(btn) ((state.ulButtonPressed & vr::ButtonMaskFromId(btn)) != 0)
-
-                if (!state.ulButtonPressed) {
-                 //   continue;
+                if (!vrControllerHandler)
+                {
+                    initVRControllerHandler(hmd, id);
                 }
+                vrControllerHandler(hmd, id);
 
-                Input::setJoyDown(0, jkLeft,  IS_DOWN(vr::k_EButton_DPad_Left));
-                Input::setJoyDown(0, jkUp,    IS_DOWN(vr::k_EButton_DPad_Up));
-                Input::setJoyDown(0, jkRight, IS_DOWN(vr::k_EButton_DPad_Right));
-                Input::setJoyDown(0, jkDown,  IS_DOWN(vr::k_EButton_DPad_Down));
-
-                if (IS_DOWN(vr::k_EButton_Axis0)) {
-                     Input::setJoyPos(0, jkL, vec2(state.rAxis[0].x, -state.rAxis[0].y));
-                }
-
-                Input::setJoyDown(0, jkA, IS_DOWN(vr::k_EButton_Axis1) ? (state.rAxis[1].x > 0.5) : false);
-                Input::setJoyDown(0, jkY, IS_DOWN(vr::k_EButton_Grip));
-                Input::setJoyDown(0, jkX, IS_DOWN(vr::k_EButton_ApplicationMenu));
-
-                // TODO
-                switch (hmd->GetControllerRoleForTrackedDeviceIndex(id)) {
-                    case vr::TrackedControllerRole_LeftHand :
-                        // TODO
-                        break;
-                    case vr::TrackedControllerRole_RightHand :
-                        // TODO
-                        break;
-                    default : ;
-                }
                 break;
-
-                #undef IS_DOWN
             }
         }
     }
